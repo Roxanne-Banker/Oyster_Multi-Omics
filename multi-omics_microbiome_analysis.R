@@ -1,6 +1,6 @@
 #rm(list = ls())
 
-setwd("/Users/roxannebanker/bioinformatics/projects/oyster-oa/microbiome/raw_data/")
+setwd("/Users/roxannebanker/bioinformatics/projects/oyster-oa/microbiome/")
 
 
 # February 2020
@@ -14,39 +14,29 @@ setwd("/Users/roxannebanker/bioinformatics/projects/oyster-oa/microbiome/raw_dat
 library(phyloseq)
 #packageVersion("phyloseq")
 library(ggplot2)
-#packageVersion("ggplot2")
+packageVersion("ggplot2")
 library(rmarkdown)
-#PackageVersion(rmarkdown)
 library(dada2)
 #packageVersion("dada2")
 library(decontam)
 #packageVersion("decontam")
 library(phangorn)
-#packageVersion("phangorn")
 library(DECIPHER)
-#packageVersion("DECIPHER")
 library(vegan)
 #packageVersion("vegan")
 library(dplyr)
-#packageVersion("dyplyr")
 library(RColorBrewer)
-#packageVersion("RColorBrewer")
 library(reshape)
-#packageVersion("reshape")
 library(coin)
-#packageVersion("coin")
 library(FSA)
 #packageVersion("FSA")
 library(Biostrings)
-#packageVersion("Biostrings")
 library(DESeq2)
-#packageVersion("DESeq2")
+library(decontam)
 library(gridExtra)
-#packageVersion("gridExtra")
 library(seqinr)
-#packageVersion("sequinr")
-#library(QsRutils)
-#packageVersion("QsRutils")
+#salibrary(QsRutils)
+
 
 # Set seed to make results reproducible
 set.seed(5311)
@@ -262,6 +252,7 @@ print(track)
 
 
 # Some improvement on sequence retention after adjusting Trunclen and maxEE parameters.
+# But is this enough???
 ######################################################
 
 
@@ -281,11 +272,68 @@ head(taxa.print)
 ######################################################
 
 
+# Evaluate accuracy
+######################################################
+
+# The tutorial has mock communities to assess accuracy of tax assignment
+# for my data set these are P-A, P-B, and P-C
+
+# I am going to revisit how to use the samples later. For now, some fun stuff.
+######################################################
+
+
+
+# Build Phylogeny
+# All from Ettinger Harbor Notebook
+# March 26 2020: This is computationally expensive and I am thus going to skip right now.
+# So far, it seems like the need for the phylogeny comes from calculating Unifrac distances
+# I plan to use Bray-Curtis, so perhaps not needed right now
+#################################################################
+
+
+#get DNA sequences from chimera-removed ASV table
+seqs <- getSequences(seqtab.nochim)
+names(seqs) <- seqs # This propagates to the tip labels of the tree
+
+#Align DNA sequences
+alignment <- AlignSeqs(DNAStringSet(seqs), anchor=NA,verbose=FALSE)
+
+#Turn alignment into a matrix
+phangAlign <- phyDat(as(alignment, "matrix"), type="DNA")
+#calculate maximum liklihood values for alignment
+dm <- dist.ml(phangAlign)
+
+
+#build neighbor joining tree
+#a GTR+G+I (Generalized time-reversible with Gamma rate variation)
+#maximum likelihood tree using the neighbor-joining tree
+treeNJ <- NJ(dm) # Note, tip order != sequence order
+fit = pml(treeNJ, data=phangAlign)
+fitGTR <- update(fit, k=4, inv=0.2)
+fitGTR <- optim.pml(fitGTR, model="GTR", optInv=TRUE,
+                    optGamma=TRUE, rearrangement = "stochastic", control = pml.control(trace = 0))
+# need to rerun, took too long ^
+
+#saveRDS(fitGTR, "Harbor_seqtab2_tree.rds")
+#Now to root the tree
+fitGTR <- readRDS("Harbor_seqtab2_tree.rds")
+#using most abundant archaea as outgroup
+outgroupseq <- "CCGGTTCGTGCCCCTAGGCTTCGTCCCTGACCGTCGGATCCGTTCCAGTGTGGCGCCTTCGCAACTGGTGGTCCTCTAAGGATGACAGGATTTTACCCCTACCCCTAGAGTACCCCACACCTCTCCC"
+
+phyloseq.tree <- root(fitGTR$tree, outgroup = outgroupseq, resolve.root = TRUE)
+
+saveRDS(phyloseq.tree, "Harbor_seqtab2_tree_archaea_rooted.rds")
+
+#################################################################
 
 
 
 
-## Phyloseq ##
+
+
+
+# Phyloseq
+
 
 # Identify Contaminants
 #################################################################
@@ -355,7 +403,7 @@ data <- prune_samples( sample_sums(ps_noChloro_noMito_noMollusc_noAni) > 0, ps_n
 
 
 
-# Summary Function (for later use)
+# Summary Function
 #################################################################
 summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
                       conf.interval=.95, .drop=TRUE) {
@@ -397,7 +445,7 @@ summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
 
 
 
-# Alpha diversity plots and statistics
+# Alpha diversity plots
 #################################################################
 # creating a list to subset phyloseq object to remove negative and positive controls
 names <- sample_names(data)
@@ -424,12 +472,12 @@ observed$treatment <- alpha_treatment
 alpha.breaks <- as.character(observed$bucket.id)
 
 alpha.ids <- c("C38-1",  "C38-2",  "C51",  "L",  
-               "LP38-1", "LP28-2", "LP51", 
-               "SM38-1", "SM38-2", "SM51")
+                "LP38-1", "LP28-2", "LP51", 
+                "SM38-1", "SM38-2", "SM51")
 
 alpha.color <-c("#8c510a", "#bf812d", "#dfc27d", "#636363",
-                "#800026", "#e31a1c", "#fd8d3c",
-                "#253494", "#1d91c0", "#7fcdbb")
+                 "#800026", "#e31a1c", "#fd8d3c",
+                 "#253494", "#1d91c0", "#7fcdbb")
 
 # factor ordering so the x axis is in the order i want
 observed$bucket.id <- factor(observed$bucket.id,levels = c("L", "C1", "C2", "C3", "OA1", "OA2", "OA3", "SM1", "SM2", "SM3"))
@@ -503,7 +551,7 @@ kruskal_test(Observed ~ treatment, distribution = approximate(nresample = 9999),
 
 
 
-# Normalizing for sample depth via variance stabalizing transformation (DESeq2)
+# Normalizing for sample depth via variance stabalizing transformation
 #################################################################
 # Will be using Deseq2 to variance stabilizing transformation, instead of the classic rarefaction or
 # turning counts into proportions. This is recommended by the McMurdie and Holmes 2014 Plos Computational Biology paper, Waste not Want not.
@@ -534,6 +582,23 @@ vst_transform[vst_transform < 0.0] <- 0.0
 # and calculating our Euclidean distance matrix
 euc_dist <- assay(data_deseq_vst)
 euc_dist <- dist(t(vst_transform))
+
+#################################################################
+
+
+
+
+# Hierarchical clustering
+#################################################################
+# Astro Tutortial: Now that we have our Euclidean distance matrix, let’s make and plot a hierarchical clustering of our samples.
+
+euc_clust <- hclust(euc_dist, method="ward.D2")
+
+euc_dend <- as.dendrogram(euc_clust, hang=0.1)
+dend_cols <- as.character(sample_info_tab$color[order.dendrogram(euc_dend)])
+labels_colors(euc_dend) <- dend_cols
+
+plot(euc_dend, ylab="VST Euc. dist.")
 
 #################################################################
 
@@ -582,8 +647,8 @@ bucket.ids <- c("C1",  "C2",  "C3",  "L",
                 "SM1", "SM2", "SM3")
 
 bucket.labs <- c("C38-1",  "C38-2",  "C51",  "L",  
-                 "LP38-1", "LP28-2", "LP51", 
-                 "SM38-1", "SM38-2", "SM51")
+               "LP38-1", "LP28-2", "LP51", 
+               "SM38-1", "SM38-2", "SM51")
 
 bucket.color <-c("#8c510a", "#bf812d", "#dfc27d", "#636363",
                  "#800026", "#e31a1c", "#fd8d3c",
@@ -630,16 +695,16 @@ plot_ordination(ps.juv, juv.ord.pcoa.bray , shape="treatment", color="treatment"
 
 
 bucket.ids2 <- c("C1",  "C2",  "C3",  
-                 "OA1", "OA2", "OA3", 
-                 "SM1", "SM2", "SM3")
+                "OA1", "OA2", "OA3", 
+                "SM1", "SM2", "SM3")
 
 bucket.color2 <-c("#8c510a", "#bf812d", "#dfc27d",
                   "#800026", "#e31a1c", "#fd8d3c",
                   "#253494", "#1d91c0", "#7fcdbb")
 
 bucket.shapes2 <-c(16, 16, 16,
-                   15, 15, 15,
-                   17, 17, 17)
+                  15, 15, 15,
+                  17, 17, 17)
 
 
 plot_ordination(physeq = ps.juv, ordination = juv.ord.pcoa.bray, color="bucket.id", shape="bucket.id") +
@@ -669,7 +734,9 @@ otu.h.d <- vegdist(otu.h, "euclidean")
 
 
 
-# Ordination Statistics (PERMANOVA and Levene's Test)
+# Ordination Statistics (PERMANOVA, Levene's Test)
+
+# all treatments, all time points within treatments
 #################################################################
 
 
@@ -710,273 +777,45 @@ adonis(Dist.treat ~ group, data = sample_data_filt)
 # Residuals 21    0.9821 0.04677         0.20412           
 # Total     27    4.8114                 1.00000   
 
+# applying bonferrni correction to p values from both tests
+
+# permanova
+levene.p <- c(0.566, 0.023) 
+
+levene.p.bonf <- p.adjust(levene.p, method="bonferroni")
+levene.p.bonf
+
+# permanova
+permanova.p <- c(0.001, 0.001) 
+
+permanova.p.bonf <- p.adjust(permanova.p, method="bonferroni")
+permanova.p.bonf
+
+#################################################################
 
 
+# separating ps objects for treatment pairwise comparisons
+#################################################################
 
+ps.larv <- subset_samples(ps.all, treatment=="larvae")
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Control 38:51
 ps.control <- subset_samples(ps.all, treatment=="control")
-# make a data frame from the sample_data
-data.control <- data.frame(sample_data(ps.control))
 
-Dist.control = phyloseq::distance(ps.control, method = "bray", type="samples")
+ps.lp <- subset_samples(ps.all, treatment=="low-ph")
 
-# betadisper: dispersion test
-control.beta <- betadisper(Dist.control, data.control$age)
-permutest(control.beta)
-#            Df    Sum Sq   Mean Sq     F N.Perm Pr(>F)
-# Groups     1 0.0012086 0.0012086 0.492    999  0.522
-# Residuals  7 0.0171944 0.0024563   
-
-# Adonis test
-adonis(Dist.control ~ age, data = data.control)
-#            Df SumsOfSqs  MeanSqs F.Model      R2 Pr(>F)   
-# age        1   0.27857 0.278570  6.4619 0.48002  0.008 **
-# Residuals  7   0.30177 0.043109         0.51998          
-# Total      8   0.58034                  1.00000  
-
-
-
-# OA 38:51
-ps.oa <- subset_samples(ps.all, treatment=="low-ph")
-# make a data frame from the sample_data
-data.oa <- data.frame(sample_data(ps.oa))
-
-Dist.oa = phyloseq::distance(ps.oa, method = "bray", type="samples")
-
-# betadisper: dispersion test
-oa.beta <- betadisper(Dist.oa, data.oa$age)
-permutest(oa.beta)
-#            Df    Sum Sq   Mean Sq      F N.Perm Pr(>F)    
-# Groups     1 0.0224936 0.0224936 17.507    999  0.001 ***
-# Residuals  7 0.0089938 0.0012848          
-
-# Adonis test
-adonis(Dist.oa ~ age, data = data.oa)
-#            Df SumsOfSqs  MeanSqs F.Model      R2 Pr(>F)  
-# age        1   0.26230 0.262299  4.8692 0.41024  0.012 *
-# Residuals  7   0.37708 0.053869         0.58976         
-# Total      8   0.63938                  1.00000   
-
-
-
-# Sodium Molybdate 38:51
 ps.sm <- subset_samples(ps.all, treatment=="molybdate")
-# make a data frame from the sample_data
-data.sm <- data.frame(sample_data(ps.sm))
 
-Dist.sm = phyloseq::distance(ps.sm, method = "bray", type="samples")
-
-# betadisper: dispersion test
-sm.beta <- betadisper(Dist.sm, data.sm$age)
-permutest(sm.beta)
-#            Df    Sum Sq    Mean Sq      F N.Perm Pr(>F)
-# Groups     1 0.0014706 0.00147057 3.3928    999  0.139
-# Residuals  5 0.0021672 0.00043344      
-
-# Adonis test
-adonis(Dist.sm ~ age, data = data.sm)
-#            Df SumsOfSqs  MeanSqs F.Model      R2 Pr(>F)  
-# age        1   0.28257 0.282573  8.8303 0.63847  0.026 *
-# Residuals  5   0.16000 0.032001         0.36153         
-# Total      6   0.44258                  1.00000  
+#################################################################
 
 
-
-
-# Control - OA All
-ps.cntrl.oa <- merge_phyloseq(ps.control,ps.oa)
-# make a data frame from the sample_data
-data.cntrl.oa <- data.frame(sample_data(ps.cntrl.oa))
-
-Dist.cntrl.oa = phyloseq::distance(ps.cntrl.oa, method = "bray", type="samples")
-
-# betadisper: dispersion test
-cntrl.oa.beta <- betadisper(Dist.cntrl.oa, data.cntrl.oa$age)
-permutest(cntrl.oa.beta)
-#            Df   Sum Sq   Mean Sq      F N.Perm Pr(>F)  
-# Groups     1 0.007009 0.0070090 3.4164    999   0.08 .
-# Residuals 16 0.032825 0.0020516            
-
-# Adonis test
-adonis(Dist.cntrl.oa ~ age, data = data.cntrl.oa)
-#           Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)   
-# age        1    0.3562  0.3562  3.5909 0.18329   0.01 **
-# Residuals 16    1.5871  0.0992         0.81671          
-# Total     17    1.9433                 1.00000  
-
-
-
-# Control 38 - OA 38
-ps.cntrl.oa <- merge_phyloseq(ps.control,ps.oa)
-# use the object with contrl and oa samples to subset down to just 38 and 51 day old juveniles for each treatment
-ps.cntrl.oa.38 <- subset_samples(ps.cntrl.oa, age < 40)
-
-# make a data frame from the sample_data
-data.cntrl.oa.38 <- data.frame(sample_data(ps.cntrl.oa.38))
-
-Dist.cntrl.oa.38 = phyloseq::distance(ps.cntrl.oa.38, method = "bray", type="samples")
-
-# betadisper: dispersion test
-cntrl.oa.beta.38 <- betadisper(Dist.cntrl.oa.38, data.cntrl.oa.38$treatment)
-permutest(cntrl.oa.beta.38)
-#            Df    Sum Sq   Mean Sq      F N.Perm Pr(>F)  
-# Groups     1 0.0057013 0.0057013 5.0745    999  0.043 *
-# Residuals 10 0.0112352 0.0011235           
-
-# Adonis test
-adonis(Dist.cntrl.oa.38 ~ treatment, data = data.cntrl.oa.38)
-#           Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)    
-# treatment  1   0.61271 0.61271  11.265 0.52975  0.001 ***
-# Residuals 10   0.54389 0.05439         0.47025           
-# Total     11   1.15660                 1.00000  
-
-
-
-# Control 51 - OA 51
-ps.cntrl.oa.51 <- subset_samples(ps.cntrl.oa, age > 40)
-# make a data frame from the sample_data
-data.cntrl.oa.51 <- data.frame(sample_data(ps.cntrl.oa.51))
-
-Dist.cntrl.oa.51 = phyloseq::distance(ps.cntrl.oa.51, method = "bray", type="samples")
-
-# betadisper: dispersion test
-cntrl.oa.beta.51 <- betadisper(Dist.cntrl.oa.51, data.cntrl.oa.51$treatment)
-permutest(cntrl.oa.beta.51)
-#            Df    Sum Sq   Mean Sq      F N.Perm Pr(>F)
-# Groups     1 0.0021518 0.0021518 0.5757    719 0.6014
-# Residuals  4 0.0149509 0.0037377            
-
-# Adonis test
-adonis(Dist.cntrl.oa.51 ~ treatment, data = data.cntrl.oa.51)
-#           Df SumsOfSqs  MeanSqs F.Model      R2 Pr(>F)
-# treatment  1   0.29558 0.295581  8.7603 0.68653    0.1
-# Residuals  4   0.13496 0.033741         0.31347       
-# Total      5   0.43055                  1.00000  
-
-
-
-# Control - SM ALL
-ps.cntrl.sm <- merge_phyloseq(ps.control,ps.sm)
-# make a data frame from the sample_data
-data.cntrl.sm <- data.frame(sample_data(ps.cntrl.sm))
-
-Dist.cntrl.sm = phyloseq::distance(ps.cntrl.sm, method = "bray", type="samples")
-
-# betadisper: dispersion test
-cntrl.sm.beta <- betadisper(Dist.cntrl.sm, data.cntrl.sm$age)
-permutest(cntrl.sm.beta)
-#            Df    Sum Sq   Mean Sq      F N.Perm Pr(>F)
-# Groups     1 0.0039854 0.0039854 2.1628    999  0.164
-# Residuals 14 0.0257978 0.0018427             
-
-# Adonis test
-adonis(Dist.cntrl.sm ~ age, data = data.cntrl.sm)
-#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)   
-# age        1   0.40936 0.40936  6.8104 0.32726  0.002 **
-# Residuals 14   0.84150 0.06011         0.67274          
-# Total     15   1.25086                 1.00000   
-
-
-
-# Control 38 - SM 38
-ps.cntrl.sm <- merge_phyloseq(ps.control,ps.sm)
-ps.cntrl.sm.38 <- subset_samples(ps.cntrl.sm, age < 40)
-
-# make a data frame from the sample_data
-data.cntrl.sm.38 <- data.frame(sample_data(ps.cntrl.sm.38))
-
-Dist.cntrl.sm.38 = phyloseq::distance(ps.cntrl.sm.38, method = "bray", type="samples")
-
-# betadisper: dispersion test
-cntrl.sm.beta.38 <- betadisper(Dist.cntrl.sm.38, data.cntrl.sm.38$treatment)
-permutest(cntrl.sm.beta.38)
-#            Df    Sum Sq    Mean Sq      F N.Perm Pr(>F)  
-# Groups     1 0.0015648 0.00156480 4.0024    999  0.063 .
-# Residuals  8 0.0031277 0.00039097           
-
-# Adonis test
-adonis(Dist.cntrl.sm.38 ~ treatment, data = data.cntrl.sm.38)
-#           Df SumsOfSqs  MeanSqs F.Model      R2 Pr(>F)   
-# treatment  1   0.25207 0.252071  6.2971 0.44045  0.007 **
-# Residuals  8   0.32024 0.040029         0.55955          
-# Total      9   0.57231                  1.00000  
-
-
-
-# Control 51 - SM 51
-ps.cntrl.sm <- merge_phyloseq(ps.control,ps.sm)
-ps.cntrl.sm.51 <- subset_samples(ps.cntrl.sm, age > 40)
-
-# make a data frame from the sample_data
-data.cntrl.sm.51 <- data.frame(sample_data(ps.cntrl.sm.51))
-
-Dist.cntrl.sm.51 = phyloseq::distance(ps.cntrl.sm.51, method = "bray", type="samples")
-
-# betadisper: dispersion test
-cntrl.sm.beta.51 <- betadisper(Dist.cntrl.sm.51, data.cntrl.sm.51$treatment)
-permutest(cntrl.sm.beta.51)
-#            Df    Sum Sq   Mean Sq     F N.Perm Pr(>F)
-# Groups     1 0.0013718 0.0013718 0.338    719 0.7014
-# Residuals  4 0.0162339 0.0040585          
-
-# Adonis test
-adonis(Dist.cntrl.sm.51 ~ treatment, data = data.cntrl.sm.51)
-#            Df SumsOfSqs  MeanSqs F.Model      R2 Pr(>F)
-# treatment  1   0.12766 0.127661   3.608 0.47423    0.1
-# Residuals  4   0.14153 0.035383         0.52577       
-# Total      5   0.26919                  1.00000  
-
-
-
-
-# OA - SM
-ps.oa.sm <- merge_phyloseq(ps.oa,ps.sm)
-# make a data frame from the sample_data
-data.oa.sm <- data.frame(sample_data(ps.oa.sm))
-
-Dist.oa.sm = phyloseq::distance(ps.oa.sm, method = "bray", type="samples")
-
-# betadisper: dispersion test
-oa.sm.beta <- betadisper(Dist.oa.sm, data.oa.sm$age)
-permutest(oa.sm.beta)
-#            Df    Sum Sq    Mean Sq     F N.Perm Pr(>F)  
-# Groups     1 0.0026709 0.00267092 4.988    999  0.023 *
-# Residuals 14 0.0074966 0.00053547        
-
-# Adonis test
-adonis(Dist.oa.sm ~ age, data = data.oa.sm)
-#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)   
-# age        1   0.39272 0.39272  4.6116 0.24778  0.002 **
-# Residuals 14   1.19223 0.08516         0.75222          
-# Total     15   1.58495                 1.00000      
-
-
-
+# pairwise between treatments
+#################################################################
 
 # Larva:Control
-ps.larv <- subset_samples(ps.all, treatment=="larvae")
 ps.larv.cntrl <- merge_phyloseq(ps.larv,ps.control)
 # make a data frame from the sample_data
 data.larv.cntrl <- data.frame(sample_data(ps.larv.cntrl))
+
 Dist.larv.cntrl = phyloseq::distance(ps.larv.cntrl, method = "bray", type="samples")
 
 # betadisper: dispersion test
@@ -995,34 +834,8 @@ adonis(Dist.larv.cntrl ~ treatment, data = data.larv.cntrl)
 
 
 
-
-# Larva:Control 38
-ps.larv <- subset_samples(ps.all, treatment=="larvae")
-ps.larv.cntrl <- merge_phyloseq(ps.larv,ps.control)
-ps.larv.cntrl.38 <- subset_samples(ps.larv.cntrl, age < 40)
-# make a data frame from the sample_data
-data.larv.cntrl.38 <- data.frame(sample_data(ps.larv.cntrl.38))
-Dist.larv.cntrl.38 = phyloseq::distance(ps.larv.cntrl.38, method = "bray", type="samples")
-
-# betadisper: dispersion test
-larv.cntrl.beta.38 <- betadisper(Dist.larv.cntrl.38, data.larv.cntrl.38$treatment)
-permutest(larv.cntrl.beta.38)
-#            Df   Sum Sq  Mean Sq      F N.Perm Pr(>F)
-# Groups     1 0.001359 0.001359 0.6833    999  0.461
-# Residuals  7 0.013923 0.001989        
-
-# Adonis test
-adonis(Dist.larv.cntrl.38 ~ treatment, data = data.larv.cntrl.38)
-#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)  
-# treatment  1    1.6400 1.63999  32.111 0.82102  0.014 *
-# Residuals  7    0.3575 0.05107         0.17898         
-# Total      8    1.9975                 1.00000  
-
-
-
-
 # Larva:Low-pH 
-ps.larv.oa <- merge_phyloseq(ps.larv,ps.oa)
+ps.larv.oa <- merge_phyloseq(ps.larv,ps.lp)
 # make a data frame from the sample_data
 data.larv.oa <- data.frame(sample_data(ps.larv.oa))
 Dist.larv.oa = phyloseq::distance(ps.larv.oa, method = "bray", type="samples")
@@ -1040,29 +853,6 @@ adonis(Dist.larv.oa ~ treatment, data = data.larv.oa)
 # treatment  1   1.77364 1.77364  22.662 0.69383  0.006 **
 # Residuals 10   0.78265 0.07827         0.30617          
 # Total     11   2.55629                 1.00000
-
-
-# Larva:Low-pH 38
-ps.larv.oa <- merge_phyloseq(ps.larv,ps.oa)
-ps.larv.oa.38 <- subset_samples(ps.larv.oa, age < 40)
-# make a data frame from the sample_data
-data.larv.oa.38 <- data.frame(sample_data(ps.larv.oa.38))
-Dist.larv.oa.38 = phyloseq::distance(ps.larv.oa.38, method = "bray", type="samples")
-
-# betadisper: dispersion test
-larv.oa.beta.38 <- betadisper(Dist.larv.oa.38, data.larv.oa.38$treatment)
-permutest(larv.oa.beta.38)
-#           Df    Sum Sq    Mean Sq      F N.Perm Pr(>F)
-# Groups     1 0.0006144 0.00061439 0.2127    999  0.644
-# Residuals  7 0.0202219 0.00288884           
-
-# Adonis test
-adonis(Dist.larv.oa.38 ~ treatment, data = data.larv.oa.38)
-#           Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)  
-# treatment  1   1.59567 1.59567  23.619 0.77138  0.017 *
-# Residuals  7   0.47292 0.06756         0.22862         
-# Total      8   2.06859                 1.00000  
-
 
 
 
@@ -1088,45 +878,592 @@ adonis(Dist.larv.sm ~ treatment, data = data.larv.sm)
 
 
 
-# Larva:Molybdate 38 
-ps.larv.sm <- merge_phyloseq(ps.larv,ps.sm)
-ps.larv.sm.38 <- subset_samples(ps.larv.sm, age < 40)
+
+# Control - OA
+ps.cntrl.oa <- merge_phyloseq(ps.control,ps.lp)
 # make a data frame from the sample_data
-data.larv.sm.38 <- data.frame(sample_data(ps.larv.sm.38))
-Dist.larv.sm.38 = phyloseq::distance(ps.larv.sm.38, method = "bray", type="samples")
+data.cntrl.oa <- data.frame(sample_data(ps.cntrl.oa))
+
+Dist.cntrl.oa = phyloseq::distance(ps.cntrl.oa, method = "bray", type="samples")
 
 # betadisper: dispersion test
-larv.sm.beta.38 <- betadisper(Dist.larv.sm.38, data.larv.sm.38$treatment)
-permutest(larv.sm.beta.38)
-#            Df    Sum Sq   Mean Sq      F N.Perm Pr(>F)
-# Groups     1 0.0045646 0.0045646 1.8843    999  0.256
-# Residuals  5 0.0121124 0.0024225       
+cntrl.oa.beta <- betadisper(Dist.cntrl.oa, data.cntrl.oa$age)
+permutest(cntrl.oa.beta)
+#            Df   Sum Sq   Mean Sq      F N.Perm Pr(>F)  
+# Groups     1 0.007009 0.0070090 3.4164    999   0.08 .
+# Residuals 16 0.032825 0.0020516            
 
 # Adonis test
-adonis(Dist.larv.sm.38 ~ treatment, data = data.larv.sm.38)
-#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)  
-# treatment  1   1.39143 1.39143   27.91 0.84807  0.023 *
-# Residuals  5   0.24927 0.04985         0.15193         
-# Total      6   1.64070                 1.00000  
+adonis(Dist.cntrl.oa ~ age, data = data.cntrl.oa)
+#           Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)   
+# age        1    0.3562  0.3562  3.5909 0.18329   0.01 **
+# Residuals 16    1.5871  0.0992         0.81671          
+# Total     17    1.9433                 1.00000  
 
-permanova.p <-c(0.001, 0.003, 0.014, 0.003, 0.014, 0.014, 0.017, 0.01, 0.001, 
-                0.1, 0.002, 0.007, 0.1, 0.002, 0.008, 0.026, 0.012)
 
-perm.p.bonf <- p.adjust(permanova.p, method="bonferroni")
-perm.p.bonf
 
-levene.p <-c(0.566, 0.500, 0.461,0.129, 0.129, 0.347, 0.644, 0.080, 0.043, 
-             0.6014, 0.164, 0.063, 0.7014, 0.023, 0.522, 0.139, 0.001)
+# Control - SM 
+ps.cntrl.sm <- merge_phyloseq(ps.control,ps.sm)
+# make a data frame from the sample_data
+data.cntrl.sm <- data.frame(sample_data(ps.cntrl.sm))
+
+Dist.cntrl.sm = phyloseq::distance(ps.cntrl.sm, method = "bray", type="samples")
+
+# betadisper: dispersion test
+cntrl.sm.beta <- betadisper(Dist.cntrl.sm, data.cntrl.sm$age)
+permutest(cntrl.sm.beta)
+#            Df    Sum Sq   Mean Sq      F N.Perm Pr(>F)
+# Groups     1 0.0039854 0.0039854 2.1628    999  0.164
+# Residuals 14 0.0257978 0.0018427             
+
+# Adonis test
+adonis(Dist.cntrl.sm ~ age, data = data.cntrl.sm)
+#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)   
+# age        1   0.40936 0.40936  6.8104 0.32726  0.002 **
+# Residuals 14   0.84150 0.06011         0.67274          
+# Total     15   1.25086                 1.00000   
+
+
+
+# OA - SM
+ps.oa.sm <- merge_phyloseq(ps.lp,ps.sm)
+# make a data frame from the sample_data
+data.oa.sm <- data.frame(sample_data(ps.oa.sm))
+
+Dist.oa.sm = phyloseq::distance(ps.oa.sm, method = "bray", type="samples")
+
+# betadisper: dispersion test
+oa.sm.beta <- betadisper(Dist.oa.sm, data.oa.sm$age)
+permutest(oa.sm.beta)
+#            Df    Sum Sq    Mean Sq     F N.Perm Pr(>F)  
+# Groups     1 0.0026709 0.00267092 4.988    999  0.023 *
+# Residuals 14 0.0074966 0.00053547        
+
+# Adonis test
+adonis(Dist.oa.sm ~ age, data = data.oa.sm)
+#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)   
+# age        1   0.39272 0.39272  4.6116 0.24778  0.002 **
+# Residuals 14   1.19223 0.08516         0.75222          
+# Total     15   1.58495                 1.00000      
+
+
+# applying bonferrni correction to p values from both tests
+
+# permanova
+levene.p <- c(0.5, 0.132, 0.347, 0.08, 0.164, 0.023) 
 
 levene.p.bonf <- p.adjust(levene.p, method="bonferroni")
 levene.p.bonf
 
+# permanova
+permanova.p <- c(0.003, 0.006, 0.014, 0.01, 0.002, 0.002) 
+
+permanova.p.bonf <- p.adjust(permanova.p, method="bonferroni")
+permanova.p.bonf
+
+#################################################################
 
 
-test.p <- c(0.001, 0.019, 0.035, 0.844, 0.304, 0.838) 
+# separating ps objects for all time points
+#################################################################
 
-test.p.bonf <- p.adjust(test.p, method="bonferroni")
-test.p.bonf
+ps.l <- subset_samples(ps.all, group=="L")
+
+ps.c38 <- subset_samples(ps.all, group=="C38")
+
+ps.c51 <- subset_samples(ps.all, group=="C51")
+
+ps.lp38 <- subset_samples(ps.all, group=="LP38")
+
+ps.lp51 <- subset_samples(ps.all, group=="LP51")
+
+ps.sm38 <- subset_samples(ps.all, group=="SM38")
+
+ps.sm51 <- subset_samples(ps.all, group=="SM51")
+
+#################################################################
+
+
+# pairwise comparisons for all time points
+#################################################################
+
+
+# Larva:Control 38
+ps.larv.c38 <- merge_phyloseq(ps.larv,ps.c38)
+# make a data frame from the sample_data
+data.larv.c38 <- data.frame(sample_data(ps.larv.c38))
+Dist.larv.c38 = phyloseq::distance(ps.larv.c38, method = "bray", type="samples")
+
+# betadisper: dispersion test
+larv.c38.beta <- betadisper(Dist.larv.c38, data.larv.c38$treatment)
+permutest(larv.c38.beta)
+#            Df   Sum Sq  Mean Sq      F N.Perm Pr(>F)
+# Groups     1 0.001359 0.001359 0.6833    999   0.44
+# Residuals  7 0.013923 0.001989        
+
+# Adonis test
+adonis(Dist.larv.c38 ~ treatment, data = data.larv.c38)
+#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)  
+# treatment  1    1.6400 1.63999  32.111 0.82102  0.011 *
+# Residuals  7    0.3575 0.05107         0.17898         
+# Total      8    1.9975                 1.00000  
+
+
+# Larva:Control 51
+ps.larv.c51 <- merge_phyloseq(ps.larv,ps.c51)
+# make a data frame from the sample_data
+data.larv.c51 <- data.frame(sample_data(ps.larv.c51))
+Dist.larv.c51 = phyloseq::distance(ps.larv.c51, method = "bray", type="samples")
+
+# betadisper: dispersion test
+larv.c51.beta <- betadisper(Dist.larv.c51, data.larv.c51$treatment)
+permutest(larv.c51.beta)
+#           Df   Sum Sq   Mean Sq     F N.Perm Pr(>F)
+# Groups     1 0.003848 0.0038480 0.588    719 0.4014
+# Residuals  4 0.026179 0.0065448            
+
+# Adonis test
+adonis(Dist.larv.c51 ~ treatment, data = data.larv.c51)
+#           Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)
+# treatment  1    1.2639  1.2639  21.905 0.84559    0.1
+# Residuals  4    0.2308  0.0577         0.15441       
+# Total      5    1.4947                 1.00000  
+
+
+# Larva:LP38
+ps.larv.lp38 <- merge_phyloseq(ps.larv,ps.lp38)
+# make a data frame from the sample_data
+data.larv.lp38 <- data.frame(sample_data(ps.larv.lp38))
+Dist.larv.lp38 = phyloseq::distance(ps.larv.lp38, method = "bray", type="samples")
+
+# betadisper: dispersion test
+larv.lp38.beta <- betadisper(Dist.larv.lp38, data.larv.lp38$treatment)
+permutest(larv.lp38.beta)
+#            Df    Sum Sq    Mean Sq      F N.Perm Pr(>F)
+# Groups     1 0.0006144 0.00061439 0.2127    999  0.633
+# Residuals  7 0.0202219 0.00288884             
+
+# Adonis test
+adonis(Dist.larv.lp38 ~ treatment, data = data.larv.lp38)
+#           Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)   
+# treatment  1   1.59567 1.59567  23.619 0.77138  0.009 **
+# Residuals  7   0.47292 0.06756         0.22862          
+# Total      8   2.06859                 1.00000  
+
+
+# Larva:LP51
+ps.larv.lp51 <- merge_phyloseq(ps.larv,ps.lp51)
+# make a data frame from the sample_data
+data.larv.lp51 <- data.frame(sample_data(ps.larv.lp51))
+Dist.larv.lp51 = phyloseq::distance(ps.larv.lp51, method = "bray", type="samples")
+
+# betadisper: dispersion test
+larv.lp51.beta <- betadisper(Dist.larv.lp51, data.larv.lp51$treatment)
+permutest(larv.lp51.beta)
+#           Df   Sum Sq   Mean Sq     F N.Perm Pr(>F)
+# Groups     1 0.011755 0.0117548 4.026    719 0.1014
+# Residuals  4 0.011679 0.0029197             
+
+# Adonis test
+adonis(Dist.larv.lp51 ~ treatment, data = data.larv.lp51)
+#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)
+# treatment  1    1.2849 1.28493  26.952 0.87077    0.1
+# Residuals  4    0.1907 0.04768         0.12923       
+# Total      5    1.4756                 1.00000       
+
+
+# Larva:SM38 
+ps.larv.sm38 <- merge_phyloseq(ps.larv,ps.sm38)
+# make a data frame from the sample_data
+data.larv.sm38 <- data.frame(sample_data(ps.larv.sm38))
+Dist.larv.sm38 = phyloseq::distance(ps.larv.sm38, method = "bray", type="samples")
+
+# betadisper: dispersion test
+larv.sm38.beta <- betadisper(Dist.larv.sm38, data.larv.sm38$treatment)
+permutest(larv.sm38.beta)
+#            Df    Sum Sq   Mean Sq      F N.Perm Pr(>F)
+# Groups     1 0.0045646 0.0045646 1.8843    999  0.255
+# Residuals  5 0.0121124 0.0024225             
+
+# Adonis test
+adonis(Dist.larv.sm38 ~ treatment, data = data.larv.sm38)
+#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)  
+# treatment  1   1.39143 1.39143   27.91 0.84807  0.021 *
+# Residuals  5   0.24927 0.04985         0.15193         
+# Total      6   1.64070                 1.00000       
+
+
+# Larva:SM51
+ps.larv.sm51 <- merge_phyloseq(ps.larv,ps.sm51)
+# make a data frame from the sample_data
+data.larv.sm51 <- data.frame(sample_data(ps.larv.sm51))
+Dist.larv.sm51 = phyloseq::distance(ps.larv.sm51, method = "bray", type="samples")
+
+# betadisper: dispersion test
+larv.sm51.beta <- betadisper(Dist.larv.sm51, data.larv.sm51$treatment)
+permutest(larv.sm51.beta)
+#            Df    Sum Sq   Mean Sq      F N.Perm Pr(>F)
+# Groups     1 0.0098148 0.0098148 3.0288    719 0.2014
+# Residuals  4 0.0129618 0.0032405            
+
+# Adonis test
+adonis(Dist.larv.sm51 ~ treatment, data = data.larv.sm51)
+#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)
+# treatment  1   1.29345 1.29345  26.227 0.86767    0.1
+# Residuals  4   0.19727 0.04932         0.13233       
+# Total      5   1.49072                 1.00000 
+
+
+# Larva:SM51
+ps.larv.sm51 <- merge_phyloseq(ps.larv,ps.sm51)
+# make a data frame from the sample_data
+data.larv.sm51 <- data.frame(sample_data(ps.larv.sm51))
+Dist.larv.sm51 = phyloseq::distance(ps.larv.sm51, method = "bray", type="samples")
+
+# betadisper: dispersion test
+larv.sm51.beta <- betadisper(Dist.larv.sm51, data.larv.sm51$treatment)
+permutest(larv.sm51.beta)
+#            Df    Sum Sq   Mean Sq      F N.Perm Pr(>F)
+# Groups     1 0.0098148 0.0098148 3.0288    719 0.2014
+# Residuals  4 0.0129618 0.0032405            
+
+# Adonis test
+adonis(Dist.larv.sm51 ~ treatment, data = data.larv.sm51)
+#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)
+# treatment  1   1.29345 1.29345  26.227 0.86767    0.1
+# Residuals  4   0.19727 0.04932         0.13233       
+# Total      5   1.49072                 1.00000 
+
+
+# C38:C51
+ps.c38.c51 <- merge_phyloseq(ps.c38,ps.c51)
+# make a data frame from the sample_data
+data.c38.c51 <- data.frame(sample_data(ps.c38.c51))
+Dist.c38.c51 = phyloseq::distance(ps.c38.c51, method = "bray", type="samples")
+
+# betadisper: dispersion test
+c38.c51.beta <- betadisper(Dist.c38.c51, data.c38.c51$group)
+permutest(c38.c51.beta)
+#            Df    Sum Sq   Mean Sq     F N.Perm Pr(>F)
+# Groups     1 0.0012086 0.0012086 0.492    999  0.494
+# Residuals  7 0.0171944 0.0024563         
+
+# Adonis test
+adonis(Dist.c38.c51 ~ group, data = data.c38.c51)
+#            Df SumsOfSqs  MeanSqs F.Model      R2 Pr(>F)   
+# group      1   0.27857 0.278570  6.4619 0.48002  0.007 **
+# Residuals  7   0.30177 0.043109         0.51998          
+# Total      8   0.58034                  1.00000  
+
+
+# C38:C51
+ps.c38.lp38 <- merge_phyloseq(ps.c38,ps.lp38)
+# make a data frame from the sample_data
+data.c38.lp38 <- data.frame(sample_data(ps.c38.lp38))
+Dist.c38.lp38 = phyloseq::distance(ps.c38.lp38, method = "bray", type="samples")
+
+# betadisper: dispersion test
+c38.lp38.beta <- betadisper(Dist.c38.lp38, data.c38.lp38$group)
+permutest(c38.lp38.beta)
+#            Df    Sum Sq   Mean Sq      F N.Perm Pr(>F)  
+# Groups     1 0.0057013 0.0057013 5.0745    999  0.048 *
+# Residuals 10 0.0112352 0.0011235         
+
+# Adonis test
+adonis(Dist.c38.lp38 ~ group, data = data.c38.lp38)
+#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)   
+# group      1   0.61271 0.61271  11.265 0.52975  0.003 **
+# Residuals 10   0.54389 0.05439         0.47025          
+# Total     11   1.15660                 1.00000  
+
+
+# C38:LP51
+ps.c38.lp51 <- merge_phyloseq(ps.c38,ps.lp51)
+# make a data frame from the sample_data
+data.c38.lp51 <- data.frame(sample_data(ps.c38.lp51))
+Dist.c38.lp51 = phyloseq::distance(ps.c38.lp51, method = "bray", type="samples")
+
+# betadisper: dispersion test
+c38.lp51.beta <- betadisper(Dist.c38.lp51, data.c38.lp51$group)
+permutest(c38.lp51.beta)
+#            Df    Sum Sq   Mean Sq      F N.Perm Pr(>F)    
+# Groups     1 0.0078017 0.0078017 20.271    999  0.001 ***
+# Residuals  7 0.0026941 0.0003849   
+
+# Adonis test
+adonis(Dist.c38.lp51 ~ group, data = data.c38.lp51)
+#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)  
+# group      1   0.57392 0.57392  15.353 0.68684  0.013 *
+# Residuals  7   0.26167 0.03738         0.31316         
+# Total      8   0.83559                 1.00000  
+
+
+# C38:SM38
+ps.c38.sm38 <- merge_phyloseq(ps.c38,ps.sm38)
+# make a data frame from the sample_data
+data.c38.sm38 <- data.frame(sample_data(ps.c38.sm38))
+Dist.c38.sm38 = phyloseq::distance(ps.c38.sm38, method = "bray", type="samples")
+
+# betadisper: dispersion test
+c38.sm38.beta <- betadisper(Dist.c38.sm38, data.c38.sm38$group)
+permutest(c38.sm38.beta)
+#            Df    Sum Sq    Mean Sq      F N.Perm Pr(>F)  
+# Groups     1 0.0015648 0.00156480 4.0024    999  0.066 .
+# Residuals  8 0.0031277 0.00039097   
+
+# Adonis test
+adonis(Dist.c38.sm38 ~ group, data = data.c38.sm38)
+#            Df SumsOfSqs  MeanSqs F.Model      R2 Pr(>F)   
+# group      1   0.25207 0.252071  6.2971 0.44045  0.005 **
+# Residuals  8   0.32024 0.040029         0.55955          
+# Total      9   0.57231                  1.00000 
+
+
+# C38:SM51
+ps.c38.sm51 <- merge_phyloseq(ps.c38,ps.sm51)
+# make a data frame from the sample_data
+data.c38.sm51 <- data.frame(sample_data(ps.c38.sm51))
+Dist.c38.sm51 = phyloseq::distance(ps.c38.sm51, method = "bray", type="samples")
+
+# betadisper: dispersion test
+c38.sm51.beta <- betadisper(Dist.c38.sm51, data.c38.sm51$group)
+permutest(c38.sm51.beta)
+#            Df    Sum Sq   Mean Sq     F N.Perm Pr(>F)  
+# Groups     1 0.0060111 0.0060111 10.58    999  0.017 *
+# Residuals  7 0.0039771 0.0005682 
+
+# Adonis test
+adonis(Dist.c38.sm51 ~ group, data = data.c38.sm51)
+#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)   
+# group      1   0.34591 0.34591  9.0269 0.56323   0.01 **
+# Residuals  7   0.26824 0.03832         0.43677          
+# Total      8   0.61415                 1.00000  
+
+
+# C51:LP38 
+ps.c51.lp38 <- merge_phyloseq(ps.c51,ps.lp38)
+# make a data frame from the sample_data
+data.c51.lp38 <- data.frame(sample_data(ps.c51.lp38))
+Dist.c51.lp38 = phyloseq::distance(ps.c51.lp38, method = "bray", type="samples")
+
+# betadisper: dispersion test
+c51.lp38.beta <- betadisper(Dist.c51.lp38, data.c51.lp38$group)
+permutest(c51.lp38.beta)
+#           Df   Sum Sq   Mean Sq      F N.Perm Pr(>F)
+# Groups     1 0.009296 0.0092960 2.7697    999  0.111
+# Residuals  7 0.023494 0.0033563   
+
+# Adonis test
+adonis(Dist.c51.lp38 ~ group, data = data.c51.lp38)
+#           Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)  
+# group      1   0.40020  0.4002  6.7151 0.48961  0.016 *
+# Residuals  7   0.41718  0.0596         0.51039         
+# Total      8   0.81738                 1.00000  
+
+
+# C51:LP51
+ps.c51.lp51 <- merge_phyloseq(ps.c51,ps.lp51)
+# make a data frame from the sample_data
+data.c51.lp51 <- data.frame(sample_data(ps.c51.lp51))
+Dist.c51.lp51 = phyloseq::distance(ps.c51.lp51, method = "bray", type="samples")
+
+# betadisper: dispersion test
+c51.lp51.beta <- betadisper(Dist.c51.lp51, data.c51.lp51$group)
+permutest(c51.lp51.beta)
+#           Df    Sum Sq   Mean Sq      F N.Perm Pr(>F)
+# Groups     1 0.0021518 0.0021518 0.5757    719 0.6014
+# Residuals  4 0.0149509 0.0037377  
+
+# Adonis test
+adonis(Dist.c51.lp51 ~ group, data = data.c51.lp51)
+#            Df SumsOfSqs  MeanSqs F.Model      R2 Pr(>F)
+# group      1   0.29558 0.295581  8.7603 0.68653    0.1
+# Residuals  4   0.13496 0.033741         0.31347       
+# Total      5   0.43055                  1.00000       
+
+
+# C51:SM51
+ps.c51.sm51 <- merge_phyloseq(ps.c51,ps.sm51)
+# make a data frame from the sample_data
+data.c51.sm51 <- data.frame(sample_data(ps.c51.sm51))
+Dist.c51.sm51 = phyloseq::distance(ps.c51.sm51, method = "bray", type="samples")
+
+# betadisper: dispersion test
+c51.sm51.beta <- betadisper(Dist.c51.sm51, data.c51.sm51$group)
+permutest(c51.sm51.beta)
+#           Df    Sum Sq   Mean Sq     F N.Perm Pr(>F)
+# Groups     1 0.0013718 0.0013718 0.338    719 0.7014
+# Residuals  4 0.0162339 0.0040585
+
+# Adonis test
+adonis(Dist.c51.sm51 ~ group, data = data.c51.sm51)
+#           Df SumsOfSqs  MeanSqs F.Model      R2 Pr(>F)
+# group      1   0.12766 0.127661   3.608 0.47423    0.1
+# Residuals  4   0.14153 0.035383         0.52577       
+# Total      5   0.26919                  1.00000 
+
+
+# LP38:LP51 
+ps.lp38.lp51 <- merge_phyloseq(ps.lp38,ps.lp51)
+# make a data frame from the sample_data
+data.lp38.lp51 <- data.frame(sample_data(ps.lp38.lp51))
+Dist.lp38.lp51 = phyloseq::distance(ps.lp38.lp51, method = "bray", type="samples")
+
+# betadisper: dispersion test
+lp38.lp51.beta <- betadisper(Dist.lp38.lp51, data.lp38.lp51$group)
+permutest(lp38.lp51.beta)
+#           Df    Sum Sq   Mean Sq      F N.Perm Pr(>F)    
+# Groups     1 0.0224936 0.0224936 17.507    999  0.001 ***
+# Residuals  7 0.0089938 0.0012848 
+
+# Adonis test
+adonis(Dist.lp38.lp51 ~ group, data = data.lp38.lp51)
+#           Df SumsOfSqs  MeanSqs F.Model      R2 Pr(>F)  
+# group      1   0.26230 0.262299  4.8692 0.41024  0.014 *
+# Residuals  7   0.37708 0.053869         0.58976         
+# Total      8   0.63938                  1.00000 
+
+
+# LP38:SM38
+ps.lp38.sm38 <- merge_phyloseq(ps.lp38,ps.sm38)
+# make a data frame from the sample_data
+data.lp38.sm38 <- data.frame(sample_data(ps.lp38.sm38))
+Dist.lp38.sm38 = phyloseq::distance(ps.lp38.sm38, method = "bray", type="samples")
+
+# betadisper: dispersion test
+lp38.sm38.beta <- betadisper(Dist.lp38.sm38, data.lp38.sm38$group)
+permutest(lp38.sm38.beta)
+#            Df    Sum Sq   Mean Sq      F N.Perm Pr(>F)    
+# Groups     1 0.0114690 0.0114690 9.7324    999  0.001 ***
+# Residuals  8 0.0094274 0.0011784 
+
+# Adonis test
+adonis(Dist.lp38.sm38 ~ group, data = data.lp38.sm38)
+#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)   
+# group      1   0.36470 0.36470  6.6971 0.45568  0.004 **
+# Residuals  8   0.43565 0.05446         0.54432          
+# Total      9   0.80035                 1.00000   
+
+
+# LP38:SM51 
+ps.lp38.sm51 <- merge_phyloseq(ps.lp38,ps.sm51)
+# make a data frame from the sample_data
+data.lp38.sm51 <- data.frame(sample_data(ps.lp38.sm51))
+Dist.lp38.sm51 = phyloseq::distance(ps.lp38.sm51, method = "bray", type="samples")
+
+# betadisper: dispersion test
+lp38.sm51.beta <- betadisper(Dist.lp38.sm51, data.lp38.sm51$group)
+permutest(lp38.sm51.beta)
+#           Df   Sum Sq   Mean Sq      F N.Perm Pr(>F)    
+# Groups     1 0.019372 0.0193719 13.195    999  0.001 ***
+# Residuals  7 0.010277 0.0014681  
+
+# Adonis test
+adonis(Dist.lp38.sm51 ~ group, data = data.lp38.sm51)
+#           Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)  
+# group      1   0.45357 0.45357  8.2757 0.54176  0.012 *
+# Residuals  7   0.38365 0.05481         0.45824         
+# Total      8   0.83722                 1.00000  
+
+
+# LP51:SM38 
+ps.lp51.sm38 <- merge_phyloseq(ps.lp51,ps.sm38)
+# make a data frame from the sample_data
+data.lp51.sm38 <- data.frame(sample_data(ps.lp51.sm38))
+Dist.lp51.sm38 = phyloseq::distance(ps.lp51.sm38, method = "bray", type="samples")
+
+# betadisper: dispersion test
+lp51.sm38.beta <- betadisper(Dist.lp51.sm38, data.lp51.sm38$group)
+permutest(lp51.sm38.beta)
+#            Df     Sum Sq    Mean Sq      F N.Perm Pr(>F)  
+# Groups     1 0.00233705 0.00233705 13.216    999  0.032 *
+# Residuals  5 0.00088421 0.00017684  
+
+# Adonis test
+adonis(Dist.lp51.sm38 ~ group, data = data.lp51.sm38)
+#            Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)  
+# group      1   0.42219 0.42219  13.758 0.73345  0.028 *
+# Residuals  5   0.15343 0.03069         0.26655         
+# Total      6   0.57562                 1.00000 
+
+
+# LP51:SM51 
+ps.lp51.sm51 <- merge_phyloseq(ps.lp51,ps.sm51)
+# make a data frame from the sample_data
+data.lp51.sm51 <- data.frame(sample_data(ps.lp51.sm51))
+Dist.lp51.sm51 = phyloseq::distance(ps.lp51.sm51, method = "bray", type="samples")
+
+# betadisper: dispersion test
+lp51.sm51.beta <- betadisper(Dist.lp51.sm51, data.lp51.sm51$group)
+permutest(lp51.sm51.beta)
+#            Df     Sum Sq   Mean Sq      F N.Perm Pr(>F)
+# Groups     1 0.00008741 8.741e-05 0.2017    719 0.7014
+# Residuals  4 0.00173362 4.334e-04   
+
+# Adonis test
+adonis(Dist.lp51.sm51 ~ group, data = data.lp51.sm51)
+#            Df SumsOfSqs  MeanSqs F.Model      R2 Pr(>F)
+# group      1   0.29045 0.290447  11.453 0.74115    0.1
+# Residuals  4   0.10144 0.025359         0.25885       
+# Total      5   0.39188                  1.00000  
+
+
+# SM38:SM51  
+ps.sm38.sm51 <- merge_phyloseq(ps.sm38,ps.sm51)
+# make a data frame from the sample_data
+data.sm38.sm51 <- data.frame(sample_data(ps.sm38.sm51))
+Dist.sm38.sm51 = phyloseq::distance(ps.sm38.sm51, method = "bray", type="samples")
+
+# betadisper: dispersion test
+sm38.sm51.beta <- betadisper(Dist.sm38.sm51, data.sm38.sm51$group)
+permutest(sm38.sm51.beta)
+#            Df    Sum Sq    Mean Sq      F N.Perm Pr(>F)
+# Groups     1 0.0014706 0.00147057 3.3928    999  0.159
+# Residuals  5 0.0021672 0.00043344   
+
+# Adonis test
+adonis(Dist.sm38.sm51 ~ group, data = data.sm38.sm51)
+#            Df SumsOfSqs  MeanSqs F.Model      R2 Pr(>F)  
+# group      1   0.28257 0.282573  8.8303 0.63847  0.041 *
+# Residuals  5   0.16000 0.032001         0.36153         
+# Total      6   0.44258                  1.00000  
+
+
+
+
+# applying bonferrni correction to p values from both tests
+# a
+# levene
+levene.p <- c(0.44, 0.4014, 0.633, 0.1014, 0.255, 0.2014, 0.494, 0.048, 0.001, 0.066, 0.017, 0.111, 0.6014, 0.971,
+              0.7014, 0.001, 0.001, 0.001, 0.032, 0.7014, 0.159) 
+
+levene.p.bonf <- p.adjust(levene.p, method="bonferroni")
+levene.p.bonf
+
+# permanova
+permanova.p <- c(0.011, 0.1, 0.009, 0.1, 0.021, 0.1, 0.007, 0.003, 0.013, 0.005, 0.01, 0.016, 0.1, 0.032, 0.1, 0.014, 
+                 0.004, 0.012, 0.028, 0.1, 0.041) 
+
+permanova.p.bonf <- p.adjust(permanova.p, method="bonferroni")
+permanova.p.bonf
+
+
+# b
+# levene
+levene.p <- c(0.44, 0.4014, 0.633, 0.1014, 0.255, 0.2014, 0.494, 0.048, 0.066, 0.6014, 0.7014, 0.001, 0.159) 
+
+levene.p.bonf <- p.adjust(levene.p, method="bonferroni")
+levene.p.bonf
+
+# permanova
+permanova.p <- c(0.011, 0.1, 0.009, 0.1, 0.021, 0.1, 0.007, 0.003, 0.005, 0.1, 0.1, 0.014, 0.041) 
+
+permanova.p.bonf <- p.adjust(permanova.p, method="bonferroni")
+permanova.p.bonf
+
+
+
+
 #################################################################
 
 
@@ -1162,7 +1499,7 @@ write.csv(avgs_filt, "treatment_fam_avg_sd_se.csv")
 
 avgs_filt$ST <- as.factor(avgs_filt$treatment)
 avgs_filt_st <- melt(data.frame(avgs_filt), id.vars=c("Family", "treatment"),
-                     measure.vars=c("mean"))
+                  measure.vars=c("mean"))
 kruskal_test(mean ~ ST, distribution=approximate(nresample=9999), data=avgs_filt)
 
 for (i in 1:length(levels(df_o$Family))) {
@@ -1760,3 +2097,8 @@ writeFasta(seqs_study, file = "oyster_seqs.fasta")
 
 
 #################################################################
+
+
+
+
+
