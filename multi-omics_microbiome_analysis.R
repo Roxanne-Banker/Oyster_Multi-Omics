@@ -2065,7 +2065,7 @@ ggplot(avgs_3, aes(x=bucket.id, y=mean, fill=Family))+
 
 
 
-# PICRUST2
+# pre-PICRUST2
 #################################################################
 # July 28 2020
 # exporting data from previous analyses to give to David as inputs for PICRUST2
@@ -2098,6 +2098,11 @@ writeFasta(seqs_study, file = "oyster_seqs.fasta")
 
 #################################################################
 
+
+# PICRUST2 Results
+#################################################################
+
+#################################################################
 
 
 
